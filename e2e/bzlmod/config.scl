@@ -1,0 +1,3 @@
+load(":generated.scl", "schema_pb2")
+
+project = schema_pb2.Config.create(name = "downstream", ports = [8080, 9090])

@@ -1,0 +1,38 @@
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("//protolark:defs.bzl", "protolark_config", "protolark_library")
+
+package(default_visibility = ["//visibility:public"])
+
+proto_library(
+    name = "common_proto",
+    srcs = ["common.proto"],
+)
+
+proto_library(
+    name = "project_proto",
+    srcs = ["project.proto"],
+    deps = [":common_proto"],
+)
+
+protolark_library(
+    name = "project_starlark",
+    out = "project_generated.bzl",
+    deps = [":project_proto"],
+)
+
+protolark_config(
+    name = "project_binary",
+    src = "project.scl",
+    data = [":project_starlark"],
+    message = "example.Project",
+    deps = [":project_proto"],
+)
+
+protolark_config(
+    name = "project_text",
+    src = "project.scl",
+    data = [":project_starlark"],
+    format = "text",
+    message = "example.Project",
+    deps = [":project_proto"],
+)

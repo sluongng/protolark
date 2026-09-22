@@ -1,0 +1,22 @@
+syntax = "proto2";
+package fixture;
+
+message Config {
+  enum Mode {
+    UNSPECIFIED = 0;
+    FAST = 1;
+  }
+  message Child {
+    optional string name = 1;
+  }
+  required string name = 1;
+  repeated int32 counts = 2;
+  map<string, Child> children = 3;
+  optional Mode mode = 4;
+  oneof choice {
+    string text = 5;
+    int64 number = 6;
+  }
+  optional Config next = 7;
+  optional bytes payload = 8;
+}

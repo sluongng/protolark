@@ -1,0 +1,41 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("@protolark//protolark:defs.bzl", "protolark_config", "protolark_library")
+
+proto_library(
+    name = "schema",
+    srcs = ["schema.proto"],
+    import_prefix = "api",
+    strip_import_prefix = "/",
+)
+
+protolark_library(
+    name = "generated",
+    deps = [":schema"],
+)
+
+build_test(
+    name = "generation_test",
+    targets = [":generated"],
+)
+
+protolark_config(
+    name = "config",
+    src = "config.scl",
+    data = [":generated"],
+    format = "text",
+    message = "downstream.Config",
+    deps = [":schema"],
+)
+
+build_test(
+    name = "config_test",
+    targets = [":config"],
+)
+
+diff_test(
+    name = "config_content_test",
+    file1 = ":config",
+    file2 = "expected.txtpb",
+)

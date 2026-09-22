@@ -1,0 +1,56 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+exports_files([
+    "Cargo.toml",
+    "Cargo.lock",
+    "LICENSE",
+])
+
+rust_library(
+    name = "protolark_lib",
+    srcs = glob(
+        ["src/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    aliases = aliases(),
+    compile_data = ["//protolark:runtime.scl"],
+    crate_name = "protolark",
+    crate_root = "src/lib.rs",
+    edition = "2024",
+    version = "0.1.0",
+    visibility = ["//:__subpackages__"],
+    deps = all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "protolark",
+    srcs = ["src/main.rs"],
+    aliases = aliases(),
+    edition = "2024",
+    version = "0.1.0",
+    visibility = ["//visibility:public"],
+    deps = [":protolark_lib"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "generator_test",
+    srcs = ["//tests:generator.rs"],
+    aliases = aliases(),
+    crate_name = "generator_test",
+    data = ["//tests:fixtures"],
+    edition = "2024",
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    deps = [":protolark_lib"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "runtime_test",
+    srcs = ["//tests:runtime.rs"],
+    aliases = aliases(),
+    crate_name = "runtime_test",
+    edition = "2024",
+    deps = [":protolark_lib"] + all_crate_deps(normal = True),
+)

@@ -1,0 +1,9 @@
+"""Exercise the shared runtime through Bazel's pure .scl loader."""
+
+load("//protolark:runtime.scl", "create_message")
+
+value = create_message(
+    "test.Message",
+    {"name": ("string", False, True, "", [], "", "", [])},
+    {"name": "shared-scl"},
+)

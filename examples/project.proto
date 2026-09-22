@@ -1,0 +1,23 @@
+syntax = "proto3";
+package example;
+import "examples/common.proto";
+message Project {
+  string name = 1;
+  repeated string targets = 2;
+  map<string, string> labels = 3;
+  Owner owner = 4;
+  optional bool enabled = 5;
+  oneof location {
+    string local_path = 6;
+    string remote_url = 7;
+  }
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    FAST = 1;
+  }
+  Mode mode = 8;
+  message Settings {
+    int32 timeout_seconds = 1;
+  }
+  Settings settings = 9;
+}

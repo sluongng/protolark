@@ -1,0 +1,10 @@
+module(name = "protolark_smoke_test")
+
+bazel_dep(name = "protolark", version = "0.1.0")
+bazel_dep(name = "protobuf", version = "36.2")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+
+local_path_override(
+    module_name = "protolark",
+    path = "../..",
+)

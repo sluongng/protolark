@@ -1,0 +1,32 @@
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load(":constructors_test.bzl", "constructor_test_suite")
+
+constructor_test_suite(name = "constructors")
+
+# Native Starlark tests load the checked-in test fixture during analysis. Keep it
+# identical to the generated action output, which is only available at execution.
+diff_test(
+    name = "generated_golden_test",
+    file1 = "//examples:project_starlark",
+    file2 = ":project_generated.golden.bzl",
+)
+
+build_test(
+    name = "embedded_generated_config_test",
+    targets = [
+        "//examples:project_binary",
+        "//examples:project_text",
+    ],
+)
+
+exports_files([
+    "generator.rs",
+    "runtime.rs",
+])
+
+filegroup(
+    name = "fixtures",
+    srcs = glob(["fixtures/**"]),
+    visibility = ["//:__pkg__"],
+)

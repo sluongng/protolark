@@ -1,0 +1,97 @@
+"""Shared validation and construction for generated protobuf configurations.
+
+Bazel's pure .scl dialect (including PROJECT.scl) only loads other .scl files
+through same-repository //... labels; it rejects .bzl files and @repo labels.
+For native .scl evaluation, keep a copy of this file in the consuming repository
+and use //protolark:runtime.scl, or set the generator's runtime_load label to its
+local location. Generated .bzl files instead load the external runtime.bzl wrapper,
+which re-exports this implementation. The standalone Protolark evaluator bundles
+this source and supplies both standard runtime labels without a local copy.
+Keep runtime copies and generated constructors on the same Protolark version.
+"""
+
+# Constructors omit unspecified/None fields. Message values are structs;
+# message identity is not validated. Bytes strings use protobuf JSON base64.
+
+def _protolark_scalar(value, kind, label, allowed):
+    actual = type(value)
+    if kind == "message":
+        if actual != "struct":
+            fail(label + ": expected struct")
+    elif kind == "string" or kind == "bytes":
+        if actual != "string":
+            fail(label + ": expected string")
+    elif kind == "bool":
+        if actual != "bool":
+            fail(label + ": expected bool")
+    elif kind == "float" or kind == "double":
+        # Bazel accepts integers; embedded interpreters may also support floats.
+        if actual != "int" and actual != "float":
+            fail(label + ": expected int or float")
+    elif kind == "enum":
+        if actual != "int" or value not in allowed:
+            fail(label + ": expected a declared enum number")
+    else:
+        if actual != "int":
+            fail(label + ": expected int")
+        bounds = {
+            "int32": (-2147483648, 2147483647),
+            "sint32": (-2147483648, 2147483647),
+            "sfixed32": (-2147483648, 2147483647),
+            "uint32": (0, 4294967295),
+            "fixed32": (0, 4294967295),
+            "int64": (-9223372036854775808, 9223372036854775807),
+            "sint64": (-9223372036854775808, 9223372036854775807),
+            "sfixed64": (-9223372036854775808, 9223372036854775807),
+            "uint64": (0, 18446744073709551615),
+            "fixed64": (0, 18446744073709551615),
+        }
+        lower, upper = bounds[kind]
+        if value < lower or value > upper:
+            fail(label + ": integer out of range for " + kind)
+
+def create_message(name, specs, kwargs):
+    """Validates schema-defined fields and returns a protobuf configuration struct.
+
+    Args:
+        name: Fully qualified protobuf message name, used in diagnostics.
+        specs: Field specifications emitted by the matching Protolark generator.
+        kwargs: Field values supplied by the configuration author.
+
+    Returns:
+        A struct containing the supplied, validated fields.
+    """
+    result = {}
+    oneofs = {}
+    for key in kwargs:
+        if key not in specs:
+            fail(name + ": unknown field " + key)
+    for key, spec in specs.items():
+        kind, repeated, required, oneof, allowed, map_key, map_value, map_allowed = spec
+        value = kwargs.get(key)
+        label = name + "." + key
+        if value == None:
+            if required:
+                fail(label + ": required field missing")
+            continue
+        if oneof != "":
+            if oneof in oneofs:
+                fail(name + ": multiple fields in oneof " + oneof)
+            oneofs[oneof] = key
+        if map_key != "":
+            if type(value) != "dict":
+                fail(label + ": expected dict")
+            for k, v in value.items():
+                _protolark_scalar(k, map_key, label + " key", [])
+                _protolark_scalar(v, map_value, label + " value", map_allowed)
+            result[key] = dict(value)
+        elif repeated:
+            if type(value) != "list" and type(value) != "tuple":
+                fail(label + ": expected list or tuple")
+            for item in value:
+                _protolark_scalar(item, kind, label + " item", allowed)
+            result[key] = list(value)
+        else:
+            _protolark_scalar(value, kind, label, allowed)
+            result[key] = value
+    return struct(**result)
