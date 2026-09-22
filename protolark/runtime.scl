@@ -94,4 +94,132 @@ def create_message(name, specs, kwargs):
         else:
             _protolark_scalar(value, kind, label, allowed)
             result[key] = value
+    _validate_wkt(name, result)
     return struct(**result)
+
+def _finite(value):
+    # Avoid float literals/builtins, which pure Bazel Starlark does not expose.
+    return value == value and value - value == 0
+
+def _validate_wkt(name, fields):
+    if name == "google.protobuf.Timestamp":
+        seconds = fields.get("seconds", 0)
+        nanos = fields.get("nanos", 0)
+        if seconds < -62135596800 or seconds > 253402300799:
+            fail(name + ".seconds: must be between -62135596800 and 253402300799")
+        if nanos < 0 or nanos > 999999999:
+            fail(name + ".nanos: must be between 0 and 999999999")
+    elif name == "google.protobuf.Duration":
+        seconds = fields.get("seconds", 0)
+        nanos = fields.get("nanos", 0)
+        if seconds < -315576000000 or seconds > 315576000000:
+            fail(name + ".seconds: must be between -315576000000 and 315576000000")
+        if nanos < -999999999 or nanos > 999999999:
+            fail(name + ".nanos: must be between -999999999 and 999999999")
+        if (seconds < 0 and nanos > 0) or (seconds > 0 and nanos < 0):
+            fail(name + ": seconds and nanos must have consistent signs")
+    elif name == "google.protobuf.Value":
+        kinds = [key for key in fields if key in ["null_value", "number_value", "string_value", "bool_value", "struct_value", "list_value"]]
+        if len(kinds) != 1:
+            fail(name + ": exactly one kind must be selected")
+        if "number_value" in fields and not _finite(fields["number_value"]):
+            fail(name + ".number_value: must be finite")
+
+_TIME_SPECS = {
+    "seconds": ("int64", False, False, "", [], "", "", []),
+    "nanos": ("int32", False, False, "", [], "", "", []),
+}
+
+def _timestamp(seconds = 0, nanos = 0):
+    return create_message("google.protobuf.Timestamp", _TIME_SPECS, {"seconds": seconds, "nanos": nanos})
+
+def _duration(seconds = 0, nanos = 0):
+    return create_message("google.protobuf.Duration", _TIME_SPECS, {"seconds": seconds, "nanos": nanos})
+
+def _value(value):
+    """Converts native JSON-like data to Value, with at most 20 container levels."""
+
+    # Build breadth-first layers, then reconstruct from the leaves. Neither
+    # recursion nor while loops are available in pure Bazel Starlark. The bound
+    # also rejects cyclic lists/dicts supported by some embedded interpreters.
+    # Each native container adds three structural levels; 20 fits the standalone
+    # evaluator's depth limit of 64.
+    layers = [[value]]
+    scheduled = 1
+    for depth in range(21):
+        children = []
+        for item in layers[-1]:
+            actual = type(item)
+            if actual in ["dict", "list", "tuple"]:
+                if depth == 20:
+                    fail("wkt.value: maximum nesting depth is 20 containers")
+
+                # Count expanded values, not input identities: small shared DAGs
+                # can otherwise expand exponentially into protobuf trees.
+                scheduled += len(item)
+                if scheduled > 100000:
+                    fail("wkt.value: maximum expanded value count is 100000")
+            if actual == "dict":
+                for key in item:
+                    if type(key) != "string":
+                        fail("wkt.value: dict keys must be strings")
+                children.extend(item.values())
+            elif actual == "list" or actual == "tuple":
+                children.extend(item)
+        if not children:
+            break
+        layers.append(children)
+
+    converted = []
+    for layer in reversed(layers):
+        parents = []
+        offset = 0
+        for item in layer:
+            actual = type(item)
+            if actual == "dict":
+                fields = {}
+                for key in item:
+                    fields[key] = converted[offset]
+                    offset += 1
+                parents.append(struct(struct_value = struct(fields = fields)))
+            elif actual == "list" or actual == "tuple":
+                parents.append(struct(list_value = struct(values = converted[offset:offset + len(item)])))
+                offset += len(item)
+            elif item == None:
+                parents.append(struct(null_value = 0))
+            elif actual == "bool":
+                parents.append(struct(bool_value = item))
+            elif actual == "string":
+                parents.append(struct(string_value = item))
+            elif actual == "int" or actual == "float":
+                if not _finite(item):
+                    fail("wkt.value: numbers must be finite")
+                if actual == "int" and (item < -9007199254740991 or item > 9007199254740991):
+                    fail("wkt.value: integers must be within the exact double range [-9007199254740991, 9007199254740991]")
+                parents.append(struct(number_value = item))
+            else:
+                fail("wkt.value: unsupported type " + actual)
+        converted = parents
+    return converted[0]
+
+def _struct(value):
+    if type(value) != "dict":
+        fail("wkt.struct: expected dict")
+    return _value(value).struct_value
+
+def _list_value(value):
+    if type(value) != "list" and type(value) != "tuple":
+        fail("wkt.list_value: expected list or tuple")
+    return _value(value).list_value
+
+# Helpers return the same structural messages as generated constructors. None
+# represents explicit JSON null only inside value/struct/list_value conversion.
+# Integers for Value must be in the safe IEEE-754 double range; pass larger
+# identifiers as strings. Embedded interpreters may also supply finite floats.
+wkt = struct(
+    timestamp = _timestamp,
+    duration = _duration,
+    value = _value,
+    struct = _struct,
+    list_value = _list_value,
+)

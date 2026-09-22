@@ -37,7 +37,7 @@ fn descriptor(sets: &[PathBuf], name: &str) -> Result<MessageDescriptor> {
 fn from_json(sets: &[PathBuf], name: &str, value: &Json) -> Result<DynamicMessage> {
     let message = DynamicMessage::deserialize(descriptor(sets, name)?, value)
         .with_context(|| format!("invalid protobuf JSON for {name}"))?;
-    validate_required(&message, name)?;
+    validate_message(&message, name, false)?;
     Ok(message)
 }
 fn json(message: &DynamicMessage) -> Result<Json> {
@@ -48,31 +48,109 @@ fn json(message: &DynamicMessage) -> Result<Json> {
         )
         .context("serialize protobuf JSON")
 }
-fn validate_required(message: &DynamicMessage, path: &str) -> Result<()> {
+// Structural serialization renames message descriptors to disable ProtoJSON's
+// special WKT representations. Restore only that explicit prefix for semantic
+// checks; ordinary schemas with similarly named packages are not special-cased.
+fn validate_message(message: &DynamicMessage, path: &str, structural: bool) -> Result<()> {
+    let descriptor = message.descriptor();
+    let name = if structural {
+        descriptor
+            .full_name()
+            .strip_prefix("protolark_internal.")
+            .unwrap_or(descriptor.full_name())
+    } else {
+        descriptor.full_name()
+    };
+    let integer = |field| {
+        message
+            .get_field_by_name(field)
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+    };
+    match name {
+        "google.protobuf.Timestamp" => {
+            if !(-62_135_596_800..=253_402_300_799).contains(&integer("seconds")) {
+                bail!("{path}.seconds: Timestamp must be within years 0001 through 9999");
+            }
+            let nanos = message
+                .get_field_by_name("nanos")
+                .and_then(|v| v.as_i32())
+                .unwrap_or(0);
+            if !(0..=999_999_999).contains(&nanos) {
+                bail!("{path}.nanos: Timestamp nanos must be in 0..=999999999");
+            }
+        }
+        "google.protobuf.Duration" => {
+            let seconds = integer("seconds");
+            let nanos = message
+                .get_field_by_name("nanos")
+                .and_then(|v| v.as_i32())
+                .unwrap_or(0);
+            if !(-315_576_000_000..=315_576_000_000).contains(&seconds) {
+                bail!("{path}.seconds: Duration seconds out of range");
+            }
+            if !(-999_999_999..=999_999_999).contains(&nanos) {
+                bail!("{path}.nanos: Duration nanos out of range");
+            }
+            if (seconds > 0 && nanos < 0) || (seconds < 0 && nanos > 0) {
+                bail!("{path}: Duration seconds and nanos must have consistent signs");
+            }
+        }
+        "google.protobuf.Value" => {
+            if ![
+                "null_value",
+                "number_value",
+                "string_value",
+                "bool_value",
+                "struct_value",
+                "list_value",
+            ]
+            .iter()
+            .any(|field| message.has_field_by_name(field))
+            {
+                bail!(
+                    "{path}: google.protobuf.Value must select a kind (use null_value for JSON null)"
+                );
+            }
+            if message.has_field_by_name("number_value")
+                && message
+                    .get_field_by_name("number_value")
+                    .and_then(|v| v.as_f64())
+                    .is_some_and(|v| !v.is_finite())
+            {
+                bail!("{path}.number_value: google.protobuf.Value requires a finite number");
+            }
+        }
+        _ => {}
+    }
     for field in message.descriptor().fields() {
         if field.is_required() && !message.has_field(&field) {
             bail!("missing required protobuf field {path}.{}", field.name());
         }
     }
     for (field, value) in message.fields() {
-        validate_value(value, &format!("{path}.{}", field.name()))?;
+        validate_value(value, &format!("{path}.{}", field.name()), structural)?;
     }
     for (extension, value) in message.extensions() {
-        validate_value(value, &format!("{path}.[{}]", extension.full_name()))?;
+        validate_value(
+            value,
+            &format!("{path}.[{}]", extension.full_name()),
+            structural,
+        )?;
     }
     Ok(())
 }
-fn validate_value(value: &Value, path: &str) -> Result<()> {
+fn validate_value(value: &Value, path: &str, structural: bool) -> Result<()> {
     match value {
-        Value::Message(message) => validate_required(message, path)?,
+        Value::Message(message) => validate_message(message, path, structural)?,
         Value::List(values) => {
             for (i, v) in values.iter().enumerate() {
-                validate_value(v, &format!("{path}[{i}]"))?;
+                validate_value(v, &format!("{path}[{i}]"), structural)?;
             }
         }
         Value::Map(values) => {
             for (k, v) in values {
-                validate_value(v, &format!("{path}[{k:?}]"))?;
+                validate_value(v, &format!("{path}[{k:?}]"), structural)?;
             }
         }
         _ => {}
@@ -93,7 +171,7 @@ pub fn encode_config(sets: &[PathBuf], name: &str, value: &Json) -> Result<Vec<u
 pub fn decode(sets: &[PathBuf], name: &str, bytes: &[u8]) -> Result<Json> {
     let message = DynamicMessage::decode(descriptor(sets, name)?, bytes)
         .with_context(|| format!("decode protobuf {name}"))?;
-    validate_required(&message, name)?;
+    validate_message(&message, name, false)?;
     json(&message)
 }
 pub fn encode_text(sets: &[PathBuf], name: &str, value: &Json) -> Result<String> {
@@ -105,7 +183,7 @@ pub fn encode_config_text(sets: &[PathBuf], name: &str, value: &Json) -> Result<
 pub fn decode_text(sets: &[PathBuf], name: &str, text: &str) -> Result<Json> {
     let message = DynamicMessage::parse_text_format(descriptor(sets, name)?, text)
         .with_context(|| format!("parse text protobuf {name}"))?;
-    validate_required(&message, name)?;
+    validate_message(&message, name, false)?;
     json(&message)
 }
 
@@ -255,7 +333,7 @@ fn normalize_any_payloads(message: &mut DynamicMessage, depth: usize) -> Result<
     };
     let mut payload = DynamicMessage::decode(payload_descriptor.clone(), bytes.as_ref())
         .with_context(|| format!("decode Any payload {name}"))?;
-    validate_required(&payload, name)?;
+    validate_message(&payload, name, false)?;
     normalize_any_payloads(&mut payload, depth + 1)?;
     let mut normalized = DynamicMessage::decode(
         normalized_descriptor(&payload_descriptor, false)?,
@@ -272,7 +350,7 @@ fn config_message(sets: &[PathBuf], name: &str, value: &Json) -> Result<DynamicM
     let mut normalized =
         DynamicMessage::deserialize(normalized_descriptor(&desc, true)?, &value)
             .with_context(|| format!("invalid structural protobuf configuration for {name}"))?;
-    validate_required(&normalized, name)?;
+    validate_message(&normalized, name, true)?;
     sort_maps(&mut normalized, &desc);
     Ok(normalized)
 }

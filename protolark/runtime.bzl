@@ -8,6 +8,8 @@ consumers must use a same-repository copy of runtime.scl via a //... label.
 The standalone Protolark evaluator supplies the standard runtime from its binary.
 """
 
-load(":runtime.scl", _create_message = "create_message")
+load(":runtime.scl", _create_message = "create_message", _wkt = "wkt")
 
 create_message = _create_message
+
+wkt = _wkt

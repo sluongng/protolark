@@ -552,3 +552,314 @@ fn declared_physical_symlinks_are_copied_inside_the_load_root() {
         json!({"name":"external-generated-input"})
     );
 }
+
+fn wkt_fixture() -> (tempfile::TempDir, Vec<PathBuf>) {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("wkts.proto"),
+        r#"syntax = "proto3";
+package wkttest;
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/any.proto";
+message Config {
+ google.protobuf.Timestamp time = 1;
+ google.protobuf.Duration duration = 2;
+ google.protobuf.Value value = 3;
+ repeated google.protobuf.Timestamp times = 4;
+ map<string, google.protobuf.Duration> durations = 5;
+ google.protobuf.Struct structure = 6;
+ google.protobuf.ListValue list = 7;
+ google.protobuf.FieldMask mask = 8;
+ google.protobuf.BoolValue enabled = 9;
+ google.protobuf.Int64Value count = 10;
+ google.protobuf.Empty empty = 11;
+ google.protobuf.Any any = 12;
+}"#,
+    )
+    .unwrap();
+    let set = protox::compile([dir.path().join("wkts.proto")], [dir.path()]).unwrap();
+    fs::write(
+        dir.path().join("types.scl"),
+        protolark::generate(&set, &[]).unwrap(),
+    )
+    .unwrap();
+    let descriptor = dir.path().join("schema.pb");
+    fs::write(&descriptor, set.encode_to_vec()).unwrap();
+    (dir, vec![descriptor])
+}
+
+#[test]
+fn well_known_semantics_are_checked_before_structural_encoding() {
+    let (_dir, sets) = wkt_fixture();
+    for (name, value, error) in [
+        ("Timestamp", json!({"seconds": -62135596801i64}), "seconds"),
+        ("Timestamp", json!({"seconds": 253402300800i64}), "seconds"),
+        ("Timestamp", json!({"nanos": -1}), "nanos"),
+        ("Timestamp", json!({"nanos": 1000000000}), "nanos"),
+        ("Duration", json!({"seconds": -315576000001i64}), "seconds"),
+        ("Duration", json!({"seconds": 315576000001i64}), "seconds"),
+        ("Duration", json!({"nanos": -1000000000}), "nanos"),
+        ("Duration", json!({"nanos": 1000000000}), "nanos"),
+        ("Duration", json!({"seconds": 1, "nanos": -1}), "signs"),
+        ("Duration", json!({"seconds": -1, "nanos": 1}), "signs"),
+        ("Value", json!({}), "kind"),
+        ("Value", json!({"number_value": "NaN"}), "finite"),
+        ("Value", json!({"number_value": "Infinity"}), "finite"),
+        ("Value", json!({"number_value": "-Infinity"}), "finite"),
+    ] {
+        let name = format!("google.protobuf.{name}");
+        for result in [
+            codec::encode_config(&sets, &name, &value).map(|_| ()),
+            codec::encode_config_text(&sets, &name, &value).map(|_| ()),
+        ] {
+            let message = format!("{:#}", result.unwrap_err());
+            assert!(message.contains(error), "{name}: {value}: {message}");
+        }
+    }
+    // Validation cannot rely on callers using a generated constructor, and must
+    // traverse ordinary messages, repeated fields, maps and nested JSON values.
+    for (value, path) in [
+        (json!({"time":{"nanos":-1}}), "wkttest.Config.time.nanos"),
+        (
+            json!({"times":[{"nanos":-1}]}),
+            "wkttest.Config.times[0].nanos",
+        ),
+        (
+            json!({"durations":{"bad":{"seconds":1,"nanos":-1}}}),
+            "wkttest.Config.durations",
+        ),
+        (
+            json!({"structure":{"fields":{"bad":{}}}}),
+            "wkttest.Config.structure.fields",
+        ),
+        (
+            json!({"list":{"values":[{}]}}),
+            "wkttest.Config.list.values[0]",
+        ),
+    ] {
+        let error = codec::encode_config(&sets, "wkttest.Config", &value).unwrap_err();
+        assert!(format!("{error:#}").contains(path), "{error:#}");
+    }
+}
+
+#[test]
+fn malformed_well_known_wire_and_text_are_rejected() {
+    let (_dir, sets) = wkt_fixture();
+    for (name, bytes, text) in [
+        (
+            "Timestamp",
+            prost_types::Timestamp {
+                seconds: 0,
+                nanos: -1,
+            }
+            .encode_to_vec(),
+            "nanos: -1",
+        ),
+        (
+            "Duration",
+            prost_types::Duration {
+                seconds: 1,
+                nanos: -1,
+            }
+            .encode_to_vec(),
+            "seconds: 1 nanos: -1",
+        ),
+        ("Value", Vec::new(), ""),
+    ] {
+        let name = format!("google.protobuf.{name}");
+        assert!(codec::decode(&sets, &name, &bytes).is_err(), "{name}");
+        assert!(codec::decode_text(&sets, &name, text).is_err(), "{name}");
+    }
+}
+
+#[test]
+fn well_known_boundaries_and_json_mappings_roundtrip() {
+    let (_dir, sets) = wkt_fixture();
+    for (name, structural, expected) in [
+        (
+            "Timestamp",
+            json!({"seconds":-62135596800i64}),
+            json!("0001-01-01T00:00:00Z"),
+        ),
+        (
+            "Timestamp",
+            json!({"seconds":253402300799i64,"nanos":999999999}),
+            json!("9999-12-31T23:59:59.999999999Z"),
+        ),
+        (
+            "Timestamp",
+            json!({"seconds":-1,"nanos":1}),
+            json!("1969-12-31T23:59:59.000000001Z"),
+        ),
+        (
+            "Duration",
+            json!({"seconds":-315576000000i64,"nanos":-999999999}),
+            json!("-315576000000.999999999s"),
+        ),
+        (
+            "Duration",
+            json!({"seconds":315576000000i64,"nanos":999999999}),
+            json!("315576000000.999999999s"),
+        ),
+        ("Duration", json!({"nanos":-1}), json!("-0.000000001s")),
+        ("Duration", json!({}), json!("0s")),
+        ("Value", json!({"null_value":0}), json!(null)),
+        ("Value", json!({"bool_value":false}), json!(false)),
+        ("Value", json!({"string_value":""}), json!("")),
+        (
+            "Struct",
+            json!({"fields":{"x":{"null_value":0}}}),
+            json!({"x":null}),
+        ),
+        (
+            "ListValue",
+            json!({"values":[{"bool_value":true},{"null_value":0}]}),
+            json!([true, null]),
+        ),
+        (
+            "FieldMask",
+            json!({"paths":["foo_bar.baz","name"]}),
+            json!("fooBar.baz,name"),
+        ),
+        ("BoolValue", json!({"value":false}), json!(false)),
+        (
+            "Int64Value",
+            json!({"value":i64::MAX}),
+            json!(i64::MAX.to_string()),
+        ),
+        ("BytesValue", json!({"value":"AAE="}), json!("AAE=")),
+        ("Empty", json!({}), json!({})),
+    ] {
+        let name = format!("google.protobuf.{name}");
+        let wire = codec::encode_config(&sets, &name, &structural).unwrap();
+        assert_eq!(
+            codec::decode(&sets, &name, &wire).unwrap(),
+            expected,
+            "{name}"
+        );
+        let text = codec::encode_config_text(&sets, &name, &structural).unwrap();
+        assert_eq!(
+            codec::decode_text(&sets, &name, &text).unwrap(),
+            expected,
+            "{name}"
+        );
+        let json_wire = codec::encode(&sets, &name, &expected).unwrap();
+        assert_eq!(wire, json_wire, "{name}");
+    }
+    // A present wrapper containing its default differs from an omitted wrapper.
+    let missing = codec::encode_config(&sets, "wkttest.Config", &json!({})).unwrap();
+    let present =
+        codec::encode_config(&sets, "wkttest.Config", &json!({"enabled":{"value":false}})).unwrap();
+    assert_ne!(missing, present);
+    assert_eq!(
+        codec::decode(&sets, "wkttest.Config", &present).unwrap(),
+        json!({"enabled":false})
+    );
+}
+
+#[test]
+fn portable_wkt_helpers_roundtrip_and_preserve_null_presence() {
+    let (dir, sets) = wkt_fixture();
+    let config = dir.path().join("config.scl");
+    fs::write(&config, r#"load("//protolark:runtime.scl", "wkt")
+load(":types.scl", "wkts_proto")
+source = {"enabled": True, "labels": ["stable", None], "nested": {"score": 1.5}, "empty": {}, "items": []}
+converted = wkt.struct(source)
+source["labels"].append("changed")
+project = wkts_proto.Config.create(
+    time = wkt.timestamp(seconds = -1, nanos = 1),
+    duration = wkt.duration(nanos = -1),
+    value = wkt.value(None),
+    structure = converted,
+    list = wkt.list_value((False, "", None, 9007199254740991)),
+)
+"#).unwrap();
+    let value = runtime::evaluate(&config, "project", None).unwrap();
+    let expected = json!({
+        "time":"1969-12-31T23:59:59.000000001Z",
+        "duration":"-0.000000001s",
+        "value":null,
+        "structure":{"enabled":true,"labels":["stable",null],"nested":{"score":1.5},"empty":{},"items":[]},
+        "list":[false,"",null,9007199254740991.0],
+    });
+    let bytes = codec::encode_config(&sets, "wkttest.Config", &value).unwrap();
+    assert_eq!(
+        codec::decode(&sets, "wkttest.Config", &bytes).unwrap(),
+        expected
+    );
+    let text = codec::encode_config_text(&sets, "wkttest.Config", &value).unwrap();
+    assert_eq!(
+        codec::decode_text(&sets, "wkttest.Config", &text).unwrap(),
+        expected
+    );
+    assert_eq!(
+        codec::encode(&sets, "wkttest.Config", &expected).unwrap(),
+        bytes
+    );
+}
+
+#[test]
+fn generated_wkt_constructors_and_helpers_reject_invalid_values() {
+    let (dir, _sets) = wkt_fixture();
+    let config = dir.path().join("config.scl");
+    for (expr, error) in [
+        ("timestamp_proto.Timestamp.create(nanos = -1)", "nanos"),
+        (
+            "duration_proto.Duration.create(seconds = 1, nanos = -1)",
+            "signs",
+        ),
+        ("struct_proto.Value.create()", "kind"),
+        (
+            "struct_proto.Value.create(number_value = float('nan'))",
+            "finite",
+        ),
+        (
+            "struct_proto.Value.create(number_value = float('inf'))",
+            "finite",
+        ),
+        ("wkt.value(float('nan'))", "finite"),
+        ("wkt.value(float('inf'))", "finite"),
+        ("wkt.value(-float('inf'))", "finite"),
+        ("wkt.value(9007199254740992)", "exact double"),
+        ("wkt.value(-9007199254740992)", "exact double"),
+        ("wkt.value({1: 'not a string key'})", "keys"),
+        ("wkt.value(struct())", "unsupported"),
+    ] {
+        fs::write(&config, format!("load('@protolark//protolark:runtime.bzl', 'wkt')\nload(':types.scl', 'timestamp_proto', 'duration_proto', 'struct_proto')\nproject = {expr}\n")).unwrap();
+        let message = format!(
+            "{:#}",
+            runtime::evaluate(&config, "project", None).unwrap_err()
+        );
+        assert!(message.contains(error), "{expr}: {message}");
+    }
+}
+
+#[test]
+fn wkt_helper_expansion_is_bounded_in_embedded_evaluation() {
+    let (dir, sets) = wkt_fixture();
+    let config = dir.path().join("bounded.scl");
+    for (depth, branching, error) in [
+        (20, false, None),
+        (21, false, Some("nesting depth")),
+        (18, true, Some("expanded")),
+    ] {
+        let child = if branching {
+            "[value, value]"
+        } else {
+            "[value]"
+        };
+        fs::write(&config, format!("load('//protolark:runtime.scl', 'wkt')\nload(':types.scl', 'wkts_proto')\ndef make():\n    value = None\n    for _ in range({depth}):\n        value = {child}\n    return wkts_proto.Config.create(value = wkt.value(value))\nproject = make()\n")).unwrap();
+        let result = runtime::evaluate(&config, "project", None);
+        if let Some(error) = error {
+            let message = format!("{:#}", result.unwrap_err());
+            assert!(message.contains(error), "{message}");
+        } else {
+            codec::encode_config(&sets, "wkttest.Config", &result.unwrap()).unwrap();
+        }
+    }
+}

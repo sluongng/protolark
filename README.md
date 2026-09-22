@@ -116,7 +116,8 @@ during execution and can load generated constructors in the same build.
 
 - Proto2/proto3 messages, nested types, enums, maps, repeated fields, required
   fields, and oneofs are supported. The generator rejects Editions and extensions/groups.
-- Constructors validate fields and return structs; omitted fields and `None` stay absent.
+- Constructors validate fields and return ordinary structs; protobuf message
+  identity is not retained or checked. Omitted fields and `None` stay absent.
 - Bytes are base64 strings. `encode --config` uses structural fields, including
   for well-known types; `encode --input` uses standard ProtoJSON mappings.
 - Decoding emits ProtoJSON and omits unknown wire fields; it is not a lossless wire editor.
@@ -124,12 +125,86 @@ during execution and can load generated constructors in the same build.
   bundled runtime, external repository loads are unsupported. Resource limits are
   best-effort, not an OS sandbox.
 
+## Well-known types
+
+Generated constructors support the structural fields of `google.protobuf`
+messages. Constructors check Timestamp bounds, Duration bounds/signs, and Value's
+selected kind and finite number requirements. The codec also enforces these
+constraints when encoding or decoding, traversing nested messages, repeated
+fields, and maps even when values bypass generated constructors.
+
+Load portable helpers from the shared runtime to avoid manually building
+`Struct`, `Value`, and `ListValue` trees:
+
+```python
+load("//protolark:runtime.scl", "wkt")
+load(":service_generated.scl", "service_proto")
+
+project = service_proto.Config.create(
+    updated_at = wkt.timestamp(seconds = 1700000000, nanos = 123000000),
+    timeout = wkt.duration(seconds = 5),
+    metadata = wkt.struct({"enabled": True, "labels": ["stable"], "owner": None}),
+)
+```
+
+The example assumes corresponding Timestamp, Duration, and Struct fields in
+`service.proto`. In `.bzl`, load `wkt` from
+`@protolark//protolark:runtime.bzl`; native `.scl` consumers need the same local
+runtime copy described above. Standalone evaluation bundles both load labels.
+
+- `wkt.timestamp(seconds = 0, nanos = 0)` and `wkt.duration(...)` accept exact
+  integer components; they validate rather than normalize invalid components.
+- `wkt.value(value)` converts JSON-like data to a Value. `wkt.struct(dict)` and
+  `wkt.list_value(list_or_tuple)` return Struct and ListValue respectively.
+- Conversion accepts string-keyed dictionaries, lists/tuples, strings, booleans,
+  finite numbers, and `None`. Here `None` means explicit JSON null; it still
+  means omission in ordinary generated constructor arguments.
+- Helpers copy nested containers and restrict integer Value inputs to
+  `[-9007199254740991, 9007199254740991]` to avoid double-precision rounding.
+  Use strings for larger identifiers. Embedded evaluation also accepts finite
+  floats; native Bazel Starlark has no float values.
+- Conversion is bounded to 20 nested containers and 100,000 expanded values.
+  The evaluator's existing 64-level structural JSON limit also counts enclosing
+  configuration fields and the extra WKT wrapper layers.
+
+For example, `wkt.value(None)` selects Value's `null_value` variant, and
+`wkt.list_value([True, "stable", None])` constructs a ListValue containing a
+boolean, a string, and null. An empty `Value.create()` is invalid; use explicit
+null instead. Invalid Timestamp nanos and inconsistent Duration signs are also
+rejected rather than silently normalized.
+
+Structural config values remain distinct from ProtoJSON: `encode --input` and
+`decode` use the standard WKT JSON forms (for example, timestamp strings and
+plain objects for Struct). Raw `Any.type_url`/`Any.value` construction remains
+available and preserves supplied payload bytes; these helpers do not pack Any
+payloads or validate FieldMask paths against a target schema.
+
+## Comparison with Skycfg
+
+[Skycfg](https://github.com/stripe/skycfg) also uses Starlark to construct
+protobuf configuration, but the projects use different execution models:
+
+| Area | Protolark | Skycfg |
+| --- | --- | --- |
+| Schema access | Generates `.scl`/`.bzl` constructors from schemas or descriptor sets | Exposes registered protobuf types through `proto.package()` |
+| Values | Ordinary structs with constructor validation; no message identity | Protobuf-aware objects with typed message assignments |
+| Execution | Standalone Rust CLI, exported config values, and Bazel generation/encoding rules | Go embedding API with `main(ctx)`, caller-supplied variables, and multiple returned messages |
+| Authoring | Portable WKT helpers and binary/text codecs | Message clone/merge, Any packing/unpacking, and config-native tests |
+
+Choose Protolark when generated constructors must also run in native Bazel
+Starlark, including `PROJECT.scl` with the loading restrictions above. Skycfg
+fits applications embedding a richer protobuf-aware Starlark environment in Go;
+its host-provided APIs are not native Bazel builtins. Protolark is not a
+drop-in implementation of Skycfg's API. See Skycfg's
+[protobuf model](https://github.com/stripe/skycfg/blob/trunk/docs/protobuf.asciidoc)
+and [module reference](https://github.com/stripe/skycfg/blob/trunk/docs/modules.asciidoc).
+
 ## Development
 
+Use Bazel for development and validation:
+
 ```sh
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+bazel build //:protolark
 bazel test //...
 (cd e2e/bzlmod && bazel test //...)
 ```
