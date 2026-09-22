@@ -57,10 +57,10 @@ _protolark_type_1 = struct(**{
     "create": _protolark_type_1_create,
 })
 
-common_pb2 = struct(**{
+common_proto = struct(**{
     "Owner": _protolark_type_0,
 })
 
-project_pb2 = struct(**{
+project_proto = struct(**{
     "Project": _protolark_type_1,
 })

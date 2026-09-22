@@ -39,11 +39,11 @@ fn generated_config_binary_and_text_roundtrip() {
     let config = dir.path().join("PROJECT.scl");
     fs::write(
         &config,
-        r#"load("//:types.scl", "test_pb2")
-project = test_pb2.Config.create(
+        r#"load("//:types.scl", "test_proto")
+project = test_proto.Config.create(
     name = "example",
     count = 18446744073709551615,
-    children = [test_pb2.Child.create(name = n) for n in ["one", "two"]],
+    children = [test_proto.Child.create(name = n) for n in ["one", "two"]],
     labels = {1: "a", 2: "b"},
     data = "AAEC",
     enabled = True,
@@ -92,7 +92,9 @@ fn invalid_fields_types_required_and_oneof_are_rejected() {
     ] {
         fs::write(
             &config,
-            format!("load('types.scl', 'test_pb2')\nproject = test_pb2.Config.create({args})\n"),
+            format!(
+                "load('types.scl', 'test_proto')\nproject = test_proto.Config.create({args})\n"
+            ),
         )
         .unwrap();
         assert!(
@@ -214,13 +216,13 @@ message Config {
     )
     .unwrap();
     let config = dir.path().join("config.scl");
-    fs::write(&config,r#"load("types.scl", "well_known_pb2", "timestamp_pb2", "any_pb2", "struct_pb2")
-project = well_known_pb2.Config.create(
-    time = timestamp_pb2.Timestamp.create(seconds = 0),
-    any = any_pb2.Any.create(type_url = "type.googleapis.com/google.protobuf.Timestamp", value = ""),
-    structure = struct_pb2.Struct.create(fields = {"hello": struct_pb2.Value.create(string_value = "world")}),
+    fs::write(&config,r#"load("types.scl", "well_known_proto", "timestamp_proto", "any_proto", "struct_proto")
+project = well_known_proto.Config.create(
+    time = timestamp_proto.Timestamp.create(seconds = 0),
+    any = any_proto.Any.create(type_url = "type.googleapis.com/google.protobuf.Timestamp", value = ""),
+    structure = struct_proto.Struct.create(fields = {"hello": struct_proto.Value.create(string_value = "world")}),
     number = float("nan"),
-    times = {"first": timestamp_pb2.Timestamp.create(seconds = 1)},
+    times = {"first": timestamp_proto.Timestamp.create(seconds = 1)},
 )
 "#).unwrap();
     let value = runtime::evaluate(&config, "project", None).unwrap();
@@ -408,7 +410,7 @@ message Config {
     )
     .unwrap();
     let config = dir.path().join("config.scl");
-    fs::write(&config, "load('types.scl', 'aliases_pb2')\nchild = aliases_pb2.Config.create(first = 'one', second = 'two')\nproject = aliases_pb2.Config.create(first = 'one', second = 'two', child = child, children = {'key': child})\n").unwrap();
+    fs::write(&config, "load('types.scl', 'aliases_proto')\nchild = aliases_proto.Config.create(first = 'one', second = 'two')\nproject = aliases_proto.Config.create(first = 'one', second = 'two', child = child, children = {'key': child})\n").unwrap();
     let value = runtime::evaluate(&config, "project", None).unwrap();
     let binary = codec::encode_config(&sets, "test.Config", &value).unwrap();
     assert_eq!(codec::decode(&sets, "test.Config", &binary).unwrap(), value);
@@ -471,7 +473,7 @@ fn declared_load_files_evaluate_generated_constructors_with_root_and_relative_lo
     let (dir, _) = fixture();
     let config = dir.path().join("input.scl");
     let helper = dir.path().join("helper.scl");
-    fs::write(&config,"load('//generated:types.scl', 'test_pb2')\nload('helper.scl', 'name')\nproject = test_pb2.Config.create(name = name)\n").unwrap();
+    fs::write(&config,"load('//generated:types.scl', 'test_proto')\nload('helper.scl', 'name')\nproject = test_proto.Config.create(name = name)\n").unwrap();
     fs::write(&helper, "name = 'declared-files'\n").unwrap();
     let files = vec![
         (PathBuf::from("app/PROJECT.scl"), config),
@@ -538,7 +540,7 @@ fn declared_physical_symlinks_are_copied_inside_the_load_root() {
     let (external, _) = fixture();
     let sandbox = tempfile::tempdir().unwrap();
     let config = sandbox.path().join("source.scl");
-    fs::write(&config,"load('generated.scl', 'test_pb2')\nproject = test_pb2.Config.create(name = 'external-generated-input')\n").unwrap();
+    fs::write(&config,"load('generated.scl', 'test_proto')\nproject = test_proto.Config.create(name = 'external-generated-input')\n").unwrap();
     let symlink = sandbox.path().join("generated-input.scl");
     std::os::unix::fs::symlink(external.path().join("types.scl"), &symlink).unwrap();
     let files = vec![

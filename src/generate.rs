@@ -224,7 +224,7 @@ fn export_name(path: &str) -> Result<String> {
         !stem.starts_with('_'),
         "file basename cannot begin with underscore: {path}"
     );
-    Ok(format!("{stem}_pb2"))
+    Ok(format!("{stem}_proto"))
 }
 fn quote(s: &str) -> String {
     format!("{s:?}")

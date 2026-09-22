@@ -1,7 +1,7 @@
 """Behavioral tests evaluating generated constructors in Bazel's Starlark."""
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
-load(":project_generated.golden.bzl", "common_pb2", "project_pb2")
+load(":project_generated.golden.bzl", "common_proto", "project_proto")
 load(":runtime_load.scl", scl_value = "value")
 
 def _constructors_impl(ctx):
@@ -9,13 +9,13 @@ def _constructors_impl(ctx):
     asserts.equals(env, "shared-scl", scl_value.name)
     targets = ["//app:all"]
     labels = {"team": "build"}
-    value = project_pb2.Project.create(
+    value = project_proto.Project.create(
         name = "test",
         targets = targets,
         labels = labels,
-        owner = common_pb2.Owner.create(name = "owner"),
-        mode = project_pb2.Project.Mode.FAST,
-        settings = project_pb2.Project.Settings.create(timeout_seconds = 30),
+        owner = common_proto.Owner.create(name = "owner"),
+        mode = project_proto.Project.Mode.FAST,
+        settings = project_proto.Project.Settings.create(timeout_seconds = 30),
         enabled = False,
     )
     asserts.equals(env, "test", value.name)
@@ -27,7 +27,7 @@ def _constructors_impl(ctx):
     labels["team"] = "changed"
     asserts.equals(env, ["//app:all"], value.targets)
     asserts.equals(env, {"team": "build"}, value.labels)
-    absent = project_pb2.Project.create(name = None)
+    absent = project_proto.Project.create(name = None)
     asserts.equals(env, [], dir(absent))
     asserts.false(env, hasattr(absent, "enabled"))
     return unittest.end(env)
@@ -36,15 +36,15 @@ _constructors_test = unittest.make(_constructors_impl)
 
 def _invalid_impl(ctx):
     if ctx.attr.case == "unknown":
-        project_pb2.Project.create(unknown = True)
+        project_proto.Project.create(unknown = True)
     elif ctx.attr.case == "type":
-        project_pb2.Project.create(name = 123)
+        project_proto.Project.create(name = 123)
     elif ctx.attr.case == "oneof":
-        project_pb2.Project.create(local_path = "a", remote_url = "b")
+        project_proto.Project.create(local_path = "a", remote_url = "b")
     elif ctx.attr.case == "range":
-        project_pb2.Project.Settings.create(timeout_seconds = 1 << 31)
+        project_proto.Project.Settings.create(timeout_seconds = 1 << 31)
     elif ctx.attr.case == "enum":
-        project_pb2.Project.create(mode = 99)
+        project_proto.Project.create(mode = 99)
     return [DefaultInfo()]
 
 _invalid = rule(implementation = _invalid_impl, attrs = {"case": attr.string()})

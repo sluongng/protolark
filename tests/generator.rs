@@ -36,8 +36,8 @@ fn deterministic_dependency_bundle_and_recursive_schema() {
     };
     let code = generate(&a, &["root.proto".into()]).unwrap();
     assert_eq!(code, generate(&b, &[]).unwrap());
-    assert!(code.contains("root_pb2 = struct("));
-    assert!(code.contains("dep_pb2 = struct("));
+    assert!(code.contains("root_proto = struct("));
+    assert!(code.contains("dep_proto = struct("));
     assert!(code.contains("\"next\": (\"message\""));
 }
 #[test]
@@ -112,7 +112,7 @@ fn generated_integer_validation_accepts_boundaries_and_rejects_overflow() {
         ("[2147483648]", false),
         ("[True]", false),
     ] {
-        std::fs::write(&config, format!("load('types.scl', 'config_pb2')\nproject = config_pb2.Config.create(name = 'test', counts = {values})\n")).unwrap();
+        std::fs::write(&config, format!("load('types.scl', 'config_proto')\nproject = config_proto.Config.create(name = 'test', counts = {values})\n")).unwrap();
         assert_eq!(
             protolark::runtime::evaluate(&config, "project", None).is_ok(),
             valid,

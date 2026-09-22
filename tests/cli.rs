@@ -44,7 +44,7 @@ fn installed_style_workflow_roundtrips_binary_and_text() {
         &["--json", "generate", "demo.proto", "--out", "demo.scl"],
     ));
     assert_eq!(result["data"]["output"], "demo.scl");
-    std::fs::write(root.path().join("PROJECT.scl"), "load(\":demo.scl\", \"demo_pb2\")\nproject = demo_pb2.Project.create(name = \"demo\", targets = [\"//:test\"], payload = \"aGk=\")\n").unwrap();
+    std::fs::write(root.path().join("PROJECT.scl"), "load(\":demo.scl\", \"demo_proto\")\nproject = demo_proto.Project.create(name = \"demo\", targets = [\"//:test\"], payload = \"aGk=\")\n").unwrap();
     let value = success(cli(
         root.path(),
         &["--json", "eval", "--config", "PROJECT.scl"],
@@ -131,7 +131,7 @@ fn generates_from_merged_descriptor_sets_and_checks_without_writing() {
         ));
         let source = std::fs::read_to_string(root.path().join(filename)).unwrap();
         assert!(source.contains(&format!("load({runtime_label:?},")));
-        std::fs::write(root.path().join("shared_config.scl"), format!("load({filename:?}, 'demo_pb2')\nproject = demo_pb2.Project.create(name = 'shared')\n")).unwrap();
+        std::fs::write(root.path().join("shared_config.scl"), format!("load({filename:?}, 'demo_proto')\nproject = demo_proto.Project.create(name = 'shared')\n")).unwrap();
         let evaluated = success(cli(
             root.path(),
             &["--json", "eval", "--config", "shared_config.scl"],
@@ -280,7 +280,7 @@ message Project { google.protobuf.Timestamp time = 1; map<string, int32> counts 
         root.path(),
         &["--json", "generate", "demo.proto", "--out", "demo.scl"],
     ));
-    std::fs::write(root.path().join("PROJECT.scl"), "load(\":demo.scl\", \"demo_pb2\", \"timestamp_pb2\")\nproject = demo_pb2.Project.create(time = timestamp_pb2.Timestamp.create(seconds = 0), counts = {\"a\": 1, \"b\": 2, \"c\": 3, \"d\": 4})\n").unwrap();
+    std::fs::write(root.path().join("PROJECT.scl"), "load(\":demo.scl\", \"demo_proto\", \"timestamp_proto\")\nproject = demo_proto.Project.create(time = timestamp_proto.Timestamp.create(seconds = 0), counts = {\"a\": 1, \"b\": 2, \"c\": 3, \"d\": 4})\n").unwrap();
     for format in ["binary", "text"] {
         let mut previous = None;
         for _ in 0..8 {
@@ -345,7 +345,7 @@ fn declared_load_files_work_without_a_physical_config_tree() {
     ));
     std::fs::write(
         root.path().join("source config.scl"),
-        "load(\":types.scl\", \"demo_pb2\")\nproject = demo_pb2.Project.create(name = \"mapped\")\n",
+        "load(\":types.scl\", \"demo_proto\")\nproject = demo_proto.Project.create(name = \"mapped\")\n",
     )
     .unwrap();
     let mapped = [

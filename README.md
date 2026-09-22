@@ -36,9 +36,9 @@ protolark generate -I . project.proto --out project_generated.bzl
 Write `project.star`:
 
 ```python
-load(":project_generated.bzl", "project_pb2")
+load(":project_generated.bzl", "project_proto")
 
-project = project_pb2.Project.create(
+project = project_proto.Project.create(
     name = "demo",
     targets = ["//app:all", "//tests:all"],
 )

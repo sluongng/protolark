@@ -1,12 +1,12 @@
-load(":project_generated.bzl", "common_pb2", "project_pb2")
+load(":project_generated.bzl", "common_proto", "project_proto")
 
-project = project_pb2.Project.create(
+project = project_proto.Project.create(
     name = "example",
     targets = ["//app:all", "//tests:all"],
     labels = {"team": "build"},
-    owner = common_pb2.Owner.create(name = "Maintainer"),
+    owner = common_proto.Owner.create(name = "Maintainer"),
     enabled = True,
     local_path = "workspace",
-    mode = project_pb2.Project.Mode.FAST,
-    settings = project_pb2.Project.Settings.create(timeout_seconds = 30),
+    mode = project_proto.Project.Mode.FAST,
+    settings = project_proto.Project.Settings.create(timeout_seconds = 30),
 )
